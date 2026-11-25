@@ -6,6 +6,7 @@ import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { baseline, bounds, validatePolicy } from "./policy.mjs";
+import { fingerprint, reseed, schedule, standings } from "./league.mjs";
 
 const worker = fileURLToPath(new URL("./match.mjs", import.meta.url));
 const execFile = promisify(execFileCb);
@@ -32,6 +33,10 @@ const known = new Set([
   "seed",
   "token",
   "challenger",
+  "seasons",
+  "size",
+  "keep",
+  "roster",
 ]);
 for (const k of Object.keys(opts)) assert.ok(known.has(k), `Unknown option: ${k}`);
 const int = (key, fallback, lo = 1, hi = 10000) => {
@@ -39,7 +44,7 @@ const int = (key, fallback, lo = 1, hi = 10000) => {
   assert.ok(Number.isInteger(n) && n >= lo && n <= hi, `Invalid --${key}: ${n}`);
   return n;
 };
-const dir = resolve(opts.dir ?? ".ai-lab");
+const dir = resolve(opts.dir ?? (command.startsWith("league") ? ".ai-lab/league" : ".ai-lab"));
 const maxTicks = int("max-ticks", 4800, 600, 30000);
 const jobs = int("jobs", 4, 1, 16);
 const root = new URL("../../", import.meta.url);
@@ -52,6 +57,7 @@ const revisionFiles = [
   "tools/ai-arena/rollout.mjs",
   "tools/ai-arena/policy.mjs",
   "tools/ai-arena/lab.mjs",
+  "tools/ai-arena/league.mjs",
 ];
 const hash = createHash("sha256").update(process.version);
 for (const f of revisionFiles) hash.update(await readFile(new URL(f, root)));
@@ -210,7 +216,191 @@ function gate(leader, candidate) {
     candidate.wins >= candidate.losses
   );
 }
-if (command === "match") {
+async function lastSeason() {
+  const files = (await readdir(dir)).filter((n) => /^season-\d{6}\.json$/.test(n)).sort();
+  return files.length ? fromFile(join(dir, files.at(-1))) : null;
+}
+async function startingRoster(size) {
+  const defaults = [
+    { id: "baseline", policy: baseline },
+    { id: "rollout", policy: { planner: "rollout" } },
+    { id: "short-serve", policy: { guardX: 125, serveDrop: 42, smashBonus: -12, zapLead: 0.25 } },
+    { id: "deep-serve", policy: { guardX: 99, serveLob: 38, smashBonus: -36, zapLead: 0.15 } },
+  ];
+  const raw = opts.roster ? await fromFile(resolve(opts.roster)) : defaults;
+  assert.ok(
+    Array.isArray(raw) && raw.length >= 2 && raw.length <= 16,
+    "--roster expects 2 to 16 entries",
+  );
+  if (opts.roster) assert.equal(raw.length, size, "--size must equal roster length");
+  const set = new Set(),
+    names = new Set();
+  const roster = [];
+  for (const r of raw.slice(0, size)) {
+    assert.ok(
+      r && /^[a-z][a-z0-9-]{0,39}$/.test(r.id) && !names.has(r.id) && !/^s\d+-new-/.test(r.id),
+      "Invalid, duplicate, or reserved entrant ID",
+    );
+    const policy = validatePolicy(r.policy),
+      signature = fingerprint(policy);
+    assert.ok(!set.has(signature), "Duplicate effective policy: " + r.id);
+    names.add(r.id);
+    set.add(signature);
+    roster.push({ id: r.id, policy, parent: null });
+  }
+  if (roster.length < size) {
+    for (const policy of rounds(baseline, mixed(opts.seed ?? 43271, "league-starters"), size * 4)) {
+      const signature = fingerprint(policy);
+      if (set.has(signature)) continue;
+      set.add(signature);
+      roster.push({ id: "starter-" + roster.length, policy, parent: "baseline" });
+      if (roster.length === size) break;
+    }
+  }
+  assert.equal(roster.length, size);
+  return roster;
+}
+async function playLeague() {
+  await mkdir(dir, { recursive: true });
+  const lock = join(dir, "league.lock"),
+    fd = await open(lock, "wx");
+  try {
+    await fd.writeFile(process.pid + "\n");
+    const prev = await lastSeason();
+    const size = int("size", prev?.setup.size ?? 4, 2, 16);
+    const setup = {
+      size,
+      keep: int("keep", prev?.setup.keep ?? Math.ceil(size / 2), 1, size - 1),
+      seed: int("seed", prev?.setup.seed ?? 43271, 1, 0xffffffff),
+      cases: int("cases", prev?.setup.cases ?? 3, 3, 30),
+      maxTicks,
+    };
+    if (prev) {
+      assert.equal(prev.revision, revision, "Code/runtime changed; use a new --dir");
+      assert.deepEqual(setup, prev.setup, "League setup changed; use a new --dir");
+      assert.ok(!opts.roster, "--roster is only for a new league");
+    }
+    let roster = prev?.nextRoster ?? (await startingRoster(size));
+    let archive = prev?.archive ?? [];
+    let champion = prev?.champion ?? { id: "release-baseline", policy: baseline };
+    const first = (prev?.season ?? 0) + 1;
+    for (let season = first; season < first + int("seasons", 1, 1, 1000); season++) {
+      const fixtures = schedule(roster, (a, b) => mixed(setup.seed, "league", season, a, b));
+      console.error(`Season ${season}: ${fixtures.length} league games`);
+      const games = await runJobs(fixtures, async (f) => ({ ...f, ...(await match(f.args)) }));
+      const table = standings(roster, games);
+      const leaders = table.slice(0, setup.keep).map((row) => roster.find((e) => e.id === row.id));
+      const contenders = [];
+      for (const parent of leaders)
+        for (const policy of rounds(
+          parent.policy,
+          mixed(setup.seed, "rookies", season, parent.id),
+          size * 6,
+        ))
+          contenders.push({ parent: parent.id, policy });
+      // Alternate parents so a second retained policy can also found a new lineage.
+      const ordered = [];
+      for (let i = 0; i < size * 6; i++)
+        for (let p = 0; p < leaders.length; p++) ordered.push(contenders[p * size * 6 + i]);
+      const turnover = reseed(roster, table, setup.keep, archive, season, ordered);
+      const leader = leaders[0],
+        previousChampion = champion;
+      const verification = {
+        attempted: fingerprint(leader.policy) !== fingerprint(champion.policy),
+      };
+      if (verification.attempted) {
+        const cases = makeCases("league-release", season, setup.seed, setup.cases);
+        if (archive.length) {
+          const historical = archive[mixed(setup.seed, "archive", season) % archive.length];
+          cases.push({
+            index: cases.length,
+            opponent: historical.policy,
+            cpuSeed: mixed(setup.seed, "historical", season),
+            id: historical.id,
+          });
+        }
+        const a = await series(champion.policy, cases),
+          b = await series(leader.policy, cases);
+        const duel = await series(leader.policy, [
+          {
+            index: 0,
+            opponent: champion.policy,
+            cpuSeed: mixed(setup.seed, "league-duel", season),
+          },
+        ]);
+        const promoted = gate(a, b) && duel.wins >= 3 && duel.timeouts === 0;
+        Object.assign(verification, {
+          cases,
+          incumbent: summary(a),
+          candidate: summary(b),
+          duel: summary(duel),
+          promoted,
+          records: { incumbent: a.records, candidate: b.records, duel: duel.records },
+        });
+        if (promoted) champion = { id: leader.id, policy: leader.policy };
+      }
+      archive = [...archive, ...turnover.eliminated];
+      const state = {
+        season,
+        revision,
+        node: process.version,
+        setup,
+        roster,
+        games,
+        table,
+        leagueLeader: leader.id,
+        ...turnover,
+        archive,
+        previousChampion,
+        champion,
+        verification,
+      };
+      await atomic(join(dir, `season-${String(season).padStart(6, "0")}.json`), state);
+      await atomic(join(dir, "league-champion.json"), champion.policy);
+      console.log(
+        JSON.stringify({
+          season,
+          games: games.length,
+          table,
+          eliminated: turnover.eliminated.map((e) => e.id),
+          entrants: turnover.entrants.map((e) => e.id),
+          leagueLeader: leader.id,
+          champion: champion.id,
+          promotion: verification.promoted ?? false,
+        }),
+      );
+      roster = turnover.nextRoster;
+    }
+  } finally {
+    await fd.close();
+    await rm(lock, { force: true });
+  }
+}
+if (command === "league") {
+  await playLeague();
+} else if (command === "league-status") {
+  const state = await lastSeason().catch((e) => {
+    if (e.code === "ENOENT") return null;
+    throw e;
+  });
+  console.log(
+    JSON.stringify(
+      state
+        ? {
+            season: state.season,
+            table: state.table,
+            leagueLeader: state.leagueLeader,
+            champion: state.champion,
+            nextRoster: state.nextRoster,
+            archived: state.archive.length,
+            logs: dir,
+          }
+        : { season: 0, logs: dir },
+      null,
+      2,
+    ),
+  );
+} else if (command === "match") {
   const left = await loadPolicy(opts.left),
     right = await loadPolicy(opts.right ?? "unlimited:cpu");
   console.log(
@@ -398,4 +588,4 @@ if (command === "match") {
     });
     console.log(JSON.stringify(summary(result), null, 2));
   }
-} else throw Error("Commands: match, challenge, evolve, status, audit");
+} else throw Error("Commands: league, league-status, match, challenge, evolve, status, audit");

@@ -95,3 +95,39 @@ sample state hashes. Existing checkpoint runs have a different code revision;
 use a new directory for the rollout experiment.
 
 See [the fixed evaluation results](ROLLOUT_RESULTS.md) for the first comparison.
+
+## Round-robin league and turnover
+
+```sh
+node tools/ai-arena/lab.mjs league --seasons=2 --size=4 --keep=2 --jobs=6
+node tools/ai-arena/lab.mjs league-status
+# Continue with the saved lineup and archive.
+node tools/ai-arena/lab.mjs league --seasons=1 --jobs=6
+```
+
+Every pair plays four full matches: both physical sides and both first servers.
+Rank by **wins, then cumulative point differential**. A tick-limit draw adds no
+wins and no points for or against. Exact ties share a displayed rank; if a tie
+straddles the retention cutoff, entrant ID is the deterministic last tiebreaker.
+The default field is the baseline, rollout, short-serve and deep-serve pilot.
+These use the same physics and stats. Built-in CPUs are evaluated separately
+as benchmarks because they can only drive 2P.
+
+`--keep` retains the top entrants. The rest are archived with their complete
+policy and results. Mutations of different retained policies fill the vacancies;
+already seen effective policies are skipped. A season JSON includes fixtures,
+all results and skill counts, rankings, lineage, archive and the next lineup.
+To use your own starting lineups, pass `--roster=roster.json` when creating a new
+`--dir`. The JSON is an array such as
+`[{"id":"base","policy":{}},{"id":"search","policy":{"planner":"rollout"}}]`;
+set `--size` to its length. Resume with the same `--max-ticks` and keep the same
+code/Node version. `league-status` reads the latest complete season.
+
+League leader and release champion are separate. The leader must beat a separate
+seeded benchmark suite (including an archived policy when available) by at
+least 10 percentage points with no increase in timeouts, and win at least 3 of
+4 completed direct matches against the release champion. If not, the champion
+stays in place even if the leader remains in the league. No game code is
+modified and no hosted worker runs after the command exits.
+
+See [the first two league seasons](LEAGUE_RESULTS.md) for the run results.
