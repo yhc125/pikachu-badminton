@@ -42,3 +42,7 @@ node tests/detmath.test.mjs
 The first plays two rollback sessions against each other over a simulated network (latency, jitter, loss, Wi-Fi stalls, a hidden tab) and checks both end with exactly the same game. The second checks `detmath.js` gives the same bits in V8 (Chrome) and, on a Mac, JavaScriptCore (Safari).
 
 Online, anything that changes the game state must give the same result in every browser: use `srand()` instead of `Math.random()`, and `detmath.js` instead of `Math.sin`, `Math.cos`, `Math.atan2` and `Math.hypot` (those differ between Chrome and Safari). New state goes in `saveState`/`loadState` too. If the two games ever drift apart anyway, a check once a second notices and the host's state is copied over.
+
+## AI Labs (fork)
+
+See [tools/ai-arena](tools/ai-arena/README.md) to run local AI-v-AI matches and resumable champion/challenger experiments.

@@ -2,3 +2,6 @@
 .vercel
 .env
 .env.*
+
+# AI Labs results and checkpoints
+.ai-lab/

@@ -1,5 +1,18 @@
 // Offline reference player for the Korean-mode benchmark. Reads snapshots and emits only 1P key input.
-export function makePilot(w, sendEvent) {
+export function makePilot(
+  w,
+  sendEvent,
+  {
+    zapLead = null,
+    guardX = 110,
+    receiveX = 105,
+    serveX = 134,
+    smashBonus = 2,
+    serveDrop = 0,
+    serveLob = 0,
+    zapDistance = 25,
+  } = {},
+) {
   const { game: g, P1: p, P2: o, S: s, bolts } = w,
     dt = 1 / 60;
   const L = "KeyA",
@@ -87,7 +100,7 @@ export function makePilot(w, sendEvent) {
     }
     let val = spare === -9 ? 140 : -spare * 100;
     val += Math.min(70, Math.abs(end.x - ox)) * 0.17;
-    if (air) val += 2;
+    if (air) val += smashBonus;
     return val;
   }
   let sent = new Set(),
@@ -338,6 +351,20 @@ export function makePilot(w, sendEvent) {
     return false;
   }
   // Recover to midcourt, shading forward for short balls. Jump over incoming zaps.
+  // Pressure only after a legal outgoing shot. Leave enough time for our own hit lockout.
+  function canPressureWithZap(f) {
+    if (s.last !== p || p.act || !p.ground || p.cd.zap > dt || p.face !== 1) return false;
+    if (!o.ground || o.knocked || o.stun > 0 || o.iframes > 0.1 || o.x - p.x < zapDistance)
+      return false;
+    const end = f.at(-1);
+    if (end.y < 196 || end.x <= 192 || end.x > 368) return false;
+    const meet = f.findIndex((v) => v.x > 192 && v.y > 156 && v.y < 196 && v.vy > 0);
+    if (meet < 0) return false;
+    const boltTravel = 0.07 + Math.max(0, o.x - p.x - 24) / 250;
+    const lead = meet * dt - boltTravel;
+    return meet * dt >= 0.34 && lead >= zapLead - 0.18 && lead <= zapLead + 0.1;
+  }
+
   function guard(f) {
     if (p.quickT > 0) {
       send([]);
@@ -345,9 +372,16 @@ export function makePilot(w, sendEvent) {
     }
     const end = f.at(-1);
     const meet = f.find((v) => v.x > 201 && v.y > 123 && v.vy > 0) ?? end;
-    const target = end.x > 193 && end.x < 367 && end.y >= 196 && meet.x < 240 ? 124 : 110;
+    const target =
+      end.x > 193 && end.x < 367 && end.y >= 196 && meet.x < 240 ? guardX + 14 : guardX;
     const move = dir(target - p.x, 2);
-    send([move], dodge(move) ? [U] : []);
+    if (dodge(move)) {
+      send([move], [U]);
+    } else if (zapLead !== null && canPressureWithZap(f)) {
+      send([move], ["KeyG"]);
+    } else {
+      send([move]);
+    }
   }
   function tick() {
     if (g.time === last || g.freeze > 0) return;
@@ -379,7 +413,7 @@ export function makePilot(w, sendEvent) {
           send([attackHold]);
           return;
         }
-        const home = 134;
+        const home = serveX;
         if (Math.abs(p.x - home) > 1.6) {
           send([dir(home - p.x)]);
           return;
@@ -389,15 +423,16 @@ export function makePilot(w, sendEvent) {
         for (const k of ["", L, R, D]) {
           const f = shot(s, k, false, p.face),
             v = oppValue(f, false, 2);
-          if (v > best) {
-            best = v;
+          const weighted = v > -200 ? v + (k === D ? serveDrop : k === L ? serveLob : 0) : v;
+          if (weighted > best) {
+            best = weighted;
             selected = k;
           }
         }
         attackHold = selected;
         send([selected], [F]);
       } else {
-        const move = dir(105 - p.x, 2);
+        const move = dir(receiveX - p.x, 2);
         send([move]);
       }
       return;
