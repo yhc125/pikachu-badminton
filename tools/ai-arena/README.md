@@ -131,3 +131,20 @@ stays in place even if the leader remains in the league. No game code is
 modified and no hosted worker runs after the command exits.
 
 See [the first two league seasons](LEAGUE_RESULTS.md) for the run results.
+
+## Verify a candidate against multiple frontrunners
+
+```sh
+node tools/ai-arena/lab.mjs faceoff --left=tools/ai-arena/fixtures/early-contact.json --roster=tools/ai-arena/fixtures/season-2-leaders.json --dir=.ai-lab/faceoff --token=leaders-1 --jobs=4
+```
+
+For each opponent separately, play both physical seats with each possible first
+server. Pass only with at least three wins out of four, at least one win as
+receiver, and no timeouts. The report includes every score and the pass/fail
+result for each opponent. This is a test only; it does not edit a roster or
+promote the candidate. Timeouts' partial points are available for diagnosis
+only. `contactTempo` weights early contact, `airBias` adjusts the heuristic's
+aerial-shot preference, and `rallyMix` with `mixSeed` varies shot preferences
+after several exchanges. Defaults leave the original controllers unchanged.
+
+See [the Season 2 frontrunner comparison](FACEOFF_RESULTS.md).

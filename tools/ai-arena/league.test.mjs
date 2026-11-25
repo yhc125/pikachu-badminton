@@ -56,7 +56,7 @@ test("turnover retains leaders and avoids cloning active or archived strategies"
   const table = standings(roster, [{ left: "bravo", right: "alpha", score: [11, 0] }]);
   const archive = [{ id: "retired", policy: { serveX: 110 } }];
   const candidates = [
-    { parent: "bravo", policy: { planner: "rollout", smashBonus: 8 } },
+    { parent: "bravo", policy: { planner: "rollout", zapLead: 0.25 } },
     { parent: "bravo", policy: { serveX: 110 } },
     { parent: "bravo", policy: { planner: "rollout", rolloutHorizon: 135 } },
   ];

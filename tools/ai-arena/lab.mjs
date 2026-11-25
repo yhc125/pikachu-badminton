@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { baseline, bounds, validatePolicy } from "./policy.mjs";
 import { fingerprint, reseed, schedule, standings } from "./league.mjs";
+import { faceoffGate, replaySeeds } from "./faceoff.mjs";
 
 const worker = fileURLToPath(new URL("./match.mjs", import.meta.url));
 const execFile = promisify(execFileCb);
@@ -58,6 +59,7 @@ const revisionFiles = [
   "tools/ai-arena/policy.mjs",
   "tools/ai-arena/lab.mjs",
   "tools/ai-arena/league.mjs",
+  "tools/ai-arena/faceoff.mjs",
 ];
 const hash = createHash("sha256").update(process.version);
 for (const f of revisionFiles) hash.update(await readFile(new URL(f, root)));
@@ -67,6 +69,18 @@ const mixed = (...words) => createHash("sha256").update(words.join("|")).digest(
 const choose = (rng, x) => x[Math.floor(rng() * x.length)];
 const tidy = (x, k) =>
   +Math.max(bounds[k][0], Math.min(bounds[k][1], x)).toFixed(k === "zapLead" ? 2 : 0);
+// Keep the existing league mutation space reproducible. Faceoff experiments opt in to extra knobs.
+const mutationKeys = [
+  "zapLead",
+  "guardX",
+  "receiveX",
+  "serveX",
+  "smashBonus",
+  "serveDrop",
+  "serveLob",
+  "zapDistance",
+  "rolloutHorizon",
+];
 const rounds = (base, seed, total) => {
   const rng = random(seed),
     out = [];
@@ -74,7 +88,7 @@ const rounds = (base, seed, total) => {
   while (out.length < total) {
     const v = { ...base };
     const count = 1 + Math.floor(rng() * 4);
-    const keys = Object.keys(bounds);
+    const keys = [...mutationKeys];
     for (let j = 0; j < count; j++) {
       const k = keys.splice(Math.floor(rng() * keys.length), 1)[0];
       const [lo, hi] = bounds[k];
@@ -143,11 +157,11 @@ function makeCases(phase, generation, seed, size) {
           )[0],
   }));
 }
-async function series(policy, cases) {
+async function series(policy, cases, gameSeeds = [1, 1728]) {
   const jobspec = [];
   for (const c of cases) {
     const sides = typeof c.opponent === "string" ? [0] : [0, 1];
-    for (const side of sides) for (const gameSeed of [1, 1728]) jobspec.push({ c, side, gameSeed });
+    for (const side of sides) for (const gameSeed of gameSeeds) jobspec.push({ c, side, gameSeed });
   }
   const records = await runJobs(jobspec, async ({ c, side, gameSeed }) => {
     const args = {
@@ -421,6 +435,72 @@ if (command === "league") {
       2,
     ),
   );
+} else if (command === "faceoff") {
+  assert.ok(opts.left && opts.roster, "Expected --left=candidate.json and --roster=opponents.json");
+  const policy = await loadPolicy(opts.left);
+  assert.equal(typeof policy, "object", "Expected a pilot candidate");
+  const roster = await fromFile(resolve(opts.roster));
+  assert.ok(
+    Array.isArray(roster) && roster.length >= 1 && roster.length <= 16,
+    "Expected 1 to 16 opponents",
+  );
+  const ids = new Set();
+  const opponents = roster.map((entry) => {
+    assert.ok(
+      entry &&
+        typeof entry.id === "string" &&
+        /^[a-z][a-z0-9-]{0,39}$/.test(entry.id) &&
+        !ids.has(entry.id),
+      "Expected distinct opponent IDs",
+    );
+    ids.add(entry.id);
+    return { id: entry.id, policy: validatePolicy(entry.policy) };
+  });
+  const seed = int("seed", 691337, 1, 0xffffffff);
+  const token = opts.token ?? "faceoff-1";
+  assert.ok(/^[a-z0-9_-]{1,60}$/i.test(token), "Invalid --token");
+  const gameSeeds = replaySeeds((side, i) => mixed(seed, token, "first-server", side, i));
+  await mkdir(dir, { recursive: true });
+  const file = join(dir, `faceoff-${token}.json`);
+  const fd = await open(file, "wx");
+  try {
+    const results = [];
+    for (const opponent of opponents) {
+      const result = await series(
+        policy,
+        [{ index: 0, opponent: opponent.policy, cpuSeed: mixed(seed, token, opponent.id) }],
+        gameSeeds,
+      );
+      const verdict = faceoffGate(result.records);
+      results.push({
+        id: opponent.id,
+        stats: summary(result),
+        ...verdict,
+        records: result.records,
+      });
+    }
+    const passed = results.every((r) => r.passed);
+    await atomic(file, {
+      revision,
+      node: process.version,
+      seed,
+      token,
+      gameSeeds,
+      maxTicks,
+      policy,
+      opponents,
+      passed,
+      results,
+    });
+    console.log(
+      JSON.stringify({ passed, results: results.map(({ records: _, ...row }) => row) }, null, 2),
+    );
+  } catch (e) {
+    await rm(file, { force: true });
+    throw e;
+  } finally {
+    await fd.close();
+  }
 } else if (command === "challenge") {
   const seed = int("seed", 752871, 1, 0xffffffff);
   const token = opts.token ?? "rollout-v1";
@@ -588,4 +668,5 @@ if (command === "league") {
     });
     console.log(JSON.stringify(summary(result), null, 2));
   }
-} else throw Error("Commands: league, league-status, match, challenge, evolve, status, audit");
+} else
+  throw Error("Commands: league, league-status, match, faceoff, challenge, evolve, status, audit");

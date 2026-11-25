@@ -12,6 +12,10 @@ export function makePilot(
     serveLob = 0,
     zapDistance = 25,
     chooseAction = null,
+    contactTempo = 0.29,
+    airBias = 0,
+    rallyMix = 0,
+    mixSeed = 1,
   } = {},
 ) {
   const { game: g, P1: p, P2: o, S: s, bolts } = w,
@@ -101,9 +105,13 @@ export function makePilot(
     }
     let val = spare === -9 ? 140 : -spare * 100;
     val += Math.min(70, Math.abs(end.x - ox)) * 0.17;
-    if (air) val += smashBonus;
+    if (air) val += smashBonus + airBias;
     return val;
   }
+  let exchange = 0,
+    airVariation = 0,
+    paceVariation = 0,
+    shotVariation = [0, 0, 0, 0];
   let sent = new Set(),
     last = -1,
     lastOwner = null,
@@ -327,7 +335,10 @@ export function makePilot(
                 if (!avoid) continue;
                 val +=
                   Math.min(15, margin) * 0.43 -
-                  idx * 0.29 -
+                  idx * (contactTempo + paceVariation) +
+                  (air
+                    ? airVariation
+                    : shotVariation[key === L ? 1 : key === R ? 2 : key === D ? 3 : 0]) -
                   (mode.dash ? 2.4 : 0) -
                   (mode.jump ? 1.5 : 0) -
                   Math.abs(tx - p.x) * 0.025 +
@@ -432,6 +443,14 @@ export function makePilot(
       plan = null;
       lastPlan = -999;
       lastOwner = s.last;
+      if (rallyMix && s.last === o && ++exchange >= 4) {
+        let seed =
+          Math.imul(exchange + Math.round(g.time * 60), 16807) ^ Math.imul(mixSeed, 52142347);
+        const unit = () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 2 ** 31 - 1;
+        airVariation = rallyMix * unit();
+        paceVariation = rallyMix * 0.014 * unit();
+        shotVariation = [0, 1, 2, 3].map(() => rallyMix * 0.55 * unit());
+      }
     }
     if (p.stun > 0 || p.knocked || g.paused) {
       plan = null;
@@ -445,6 +464,11 @@ export function makePilot(
     }
     if (g.state === "serve") {
       plan = null;
+      if (rallyMix && exchange) {
+        exchange = 0;
+        airVariation = paceVariation = 0;
+        shotVariation.fill(0);
+      }
       if (g.server === p) {
         if (p.act) {
           send([attackHold]);

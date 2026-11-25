@@ -1,0 +1,5 @@
+{
+  "planner": "rollout",
+  "contactTempo": 0.65,
+  "airBias": -55
+}

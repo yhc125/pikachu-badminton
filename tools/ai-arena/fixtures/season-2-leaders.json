@@ -1,0 +1,32 @@
+[
+  {
+    "id": "rollout",
+    "policy": {
+      "zapLead": null,
+      "guardX": 110,
+      "receiveX": 105,
+      "serveX": 134,
+      "smashBonus": 2,
+      "serveDrop": 0,
+      "serveLob": 0,
+      "zapDistance": 25,
+      "rolloutHorizon": 108,
+      "planner": "rollout"
+    }
+  },
+  {
+    "id": "s0002-new-01",
+    "policy": {
+      "zapLead": null,
+      "guardX": 101,
+      "receiveX": 105,
+      "serveX": 134,
+      "smashBonus": 11,
+      "serveDrop": 0,
+      "serveLob": 4,
+      "zapDistance": 25,
+      "rolloutHorizon": 108,
+      "planner": "rollout"
+    }
+  }
+]

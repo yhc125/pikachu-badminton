@@ -8,6 +8,10 @@ export const baseline = Object.freeze({
   serveLob: 0,
   zapDistance: 25,
   rolloutHorizon: 108,
+  contactTempo: 0.29,
+  airBias: 0,
+  rallyMix: 0,
+  mixSeed: 1,
 });
 export const bounds = Object.freeze({
   zapLead: [0.08, 0.45],
@@ -19,6 +23,10 @@ export const bounds = Object.freeze({
   serveLob: [-20, 55],
   zapDistance: [20, 95],
   rolloutHorizon: [72, 180],
+  contactTempo: [-1, 1.6],
+  airBias: [-80, 60],
+  rallyMix: [0, 100],
+  mixSeed: [1, 999],
 });
 export function validatePolicy(input) {
   if (!input || typeof input !== "object" || Array.isArray(input))

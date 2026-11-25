@@ -95,10 +95,10 @@ export function fingerprint(raw) {
     rollout = p.planner === "rollout";
   const ordered = { ...baseline, planner: rollout ? "rollout" : "heuristic" };
   for (const k of Object.keys(ordered)) if (k !== "planner") ordered[k] = p[k];
+  if (!ordered.rallyMix) ordered.mixSeed = baseline.mixSeed;
   if (rollout) {
-    ordered.smashBonus = 0;
-    ordered.serveDrop = 0;
-    ordered.serveLob = 0;
+    // Even when the live controller overrides shot biases, the continuation in
+    // its rollout uses them, so they remain part of the effective policy.
     ordered.zapLead = null;
   } else {
     ordered.rolloutHorizon = baseline.rolloutHorizon;

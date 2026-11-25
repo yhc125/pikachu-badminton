@@ -41,3 +41,12 @@ test("mirrored pilots can independently serve and rally without crossing", () =>
     assert.ok(counts.every((c) => c.shots > 0 && c.tail > 0));
   }
 });
+
+test("partial rollout policy receives the full default horizon in the worker", () => {
+  const args = { right: "unlimited:cpu", gameSeed: 1, cpuSeed: 19, maxTicks: 600 };
+  const policy = { planner: "rollout" };
+  const partial = match({ ...args, left: policy });
+  const expanded = match({ ...args, left: validatePolicy(policy) });
+  assert.deepEqual(partial, expanded);
+  assert.ok(partial.evaluation[0].resolved > 0);
+});

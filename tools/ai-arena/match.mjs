@@ -152,6 +152,8 @@ export async function play({ left, right, gameSeed, cpuSeed, maxTicks = 15_000 }
   assert.ok(typeof left === "object" && left !== null, "Left uses a pilot policy");
   const native = typeof right === "string";
   assert.ok(!native || Object.hasOwn(aiLevels, right), `Unknown opponent: ${right}`);
+  left = validatePolicy(left);
+  if (!native) right = validatePolicy(right);
   setAI(native ? right : null);
   const unseeded = Math.random;
   let rng = cpuSeed >>> 0;
