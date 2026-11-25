@@ -7,6 +7,7 @@ export const baseline = Object.freeze({
   serveDrop: 0,
   serveLob: 0,
   zapDistance: 25,
+  rolloutHorizon: 108,
 });
 export const bounds = Object.freeze({
   zapLead: [0.08, 0.45],
@@ -17,13 +18,16 @@ export const bounds = Object.freeze({
   serveDrop: [-20, 55],
   serveLob: [-20, 55],
   zapDistance: [20, 95],
+  rolloutHorizon: [72, 180],
 });
 export function validatePolicy(input) {
   if (!input || typeof input !== "object" || Array.isArray(input))
     throw Error("Policy must be a JSON object");
   for (const k of Object.keys(input))
-    if (!Object.hasOwn(bounds, k)) throw Error(`Unknown policy field: ${k}`);
+    if (k !== "planner" && !Object.hasOwn(bounds, k)) throw Error(`Unknown policy field: ${k}`);
   const policy = { ...baseline, ...input };
+  if (policy.planner !== undefined && !["heuristic", "rollout"].includes(policy.planner))
+    throw Error("Invalid planner");
   for (const [k, [min, max]] of Object.entries(bounds)) {
     const v = policy[k];
     if (k === "zapLead" && v === null) continue;

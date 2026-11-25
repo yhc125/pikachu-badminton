@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { match } from "../korean-shutout/load-game.mjs";
 import { makePilot } from "../korean-shutout/pilot.mjs";
 import { validatePolicy } from "./policy.mjs";
+import { makeRollout } from "./rollout.mjs";
 
 const keyMirror = {
   KeyA: "ArrowRight",
@@ -16,8 +17,8 @@ const dt = 1 / 60,
   WIDTH = 384;
 const metrics = () => ({ shots: 0, tail: 0, dash: 0, zapFired: 0, zapHit: 0, jump: 0 });
 
-function asPilot(side, config) {
-  const { game, P1, P2, S, bolts, keyDown, keyUp } = match;
+function asPilot(engine, side, config, chooseAction = null) {
+  const { game, P1, P2, S, bolts, keyDown, keyUp } = engine;
   const flip = side === 2;
   const viewPlayer = (p) =>
     Object.freeze({
@@ -121,9 +122,13 @@ function asPilot(side, config) {
       if (type === "keydown") keyDown(physical);
       else keyUp(physical);
     },
-    validatePolicy(config),
+    {
+      ...validatePolicy(config),
+      ...(chooseAction ? { smashBonus: 0, serveLob: 0, serveDrop: 0, chooseAction } : {}),
+    },
   );
   return {
+    prime: pilot.prime,
     tick() {
       observations.bolts.length = 0;
       for (const b of bolts)
@@ -142,15 +147,23 @@ function asPilot(side, config) {
 }
 
 // Worker runs a single match to avoid mutable state leaking across matches.
-export function play({ left, right, gameSeed, cpuSeed, maxTicks = 15_000 }) {
+export async function play({ left, right, gameSeed, cpuSeed, maxTicks = 15_000 }) {
   const { game, P1, P2, S, pressed, keyDown, keyUp, setAI, step, aiLevels } = match;
   assert.ok(typeof left === "object" && left !== null, "Left uses a pilot policy");
   const native = typeof right === "string";
   assert.ok(!native || Object.hasOwn(aiLevels, right), `Unknown opponent: ${right}`);
   setAI(native ? right : null);
-  const pilots = [asPilot(1, left), ...(native ? [] : [asPilot(2, right)])];
   const unseeded = Math.random;
   let rng = cpuSeed >>> 0;
+  const useRollout = left.planner === "rollout" || right?.planner === "rollout";
+  const rollout =
+    useRollout && (await makeRollout(match, asPilot, () => rng, native ? right : null));
+  const choose = (side, config, opponent) =>
+    config.planner === "rollout" ? rollout.forSide(side, config, opponent) : null;
+  const pilots = [
+    asPilot(match, 1, left, choose(1, left, native ? null : right)),
+    ...(native ? [] : [asPilot(match, 2, right, choose(2, right, left))]),
+  ];
   Math.random = () => (rng = (Math.imul(rng, 1664525) + 1013904223) >>> 0) / 2 ** 32;
   try {
     game.rng = gameSeed >>> 0;
@@ -196,6 +209,7 @@ export function play({ left, right, gameSeed, cpuSeed, maxTicks = 15_000 }) {
       server,
       counts,
       crossed,
+      ...(rollout ? { evaluation: rollout.report } : {}),
       power: [1, native ? (aiLevels[right].pow ?? 1) : 1],
     };
   } finally {
@@ -203,4 +217,4 @@ export function play({ left, right, gameSeed, cpuSeed, maxTicks = 15_000 }) {
   }
 }
 
-if (process.argv[2]) console.log(JSON.stringify(play(JSON.parse(process.argv[2]))));
+if (process.argv[2]) console.log(JSON.stringify(await play(JSON.parse(process.argv[2]))));

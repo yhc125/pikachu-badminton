@@ -11,6 +11,7 @@ export function makePilot(
     serveDrop = 0,
     serveLob = 0,
     zapDistance = 25,
+    chooseAction = null,
   } = {},
 ) {
   const { game: g, P1: p, P2: o, S: s, bolts } = w,
@@ -109,7 +110,10 @@ export function makePilot(
     plan = null,
     attackHold = "",
     n = 0,
-    lastPlan = -999;
+    lastPlan = -999,
+    nextZapCheck = 0,
+    nextShotCheck = 0,
+    groundUntil = -1;
   function send(held = [], pulses = []) {
     if (p.x >= 187.5 && pulses.includes(H) && held.includes(R))
       pulses = pulses.filter((k) => k !== H);
@@ -202,7 +206,7 @@ export function makePilot(
       fight = Math.max(0, (o.x - 202) * 0.03);
     if (max < 3) return null;
     const modes = [{ jump: 0 }];
-    if (p.ground) {
+    if (p.ground && g.time >= groundUntil) {
       for (let i = 1; i < Math.min(42, max); i += 4) modes.push({ jump: i });
     } else if (p.vy > 0) {
       let yi = p.y,
@@ -215,7 +219,7 @@ export function makePilot(
       }
       if (j + 5 < max) modes.push({ jump: j + 1 }, { jump: j + 5 }, { jump: j + 10 });
     }
-    if (p.cd.quick <= dt && p.quickT <= 0) {
+    if (p.cd.quick <= dt && p.quickT <= 0 && g.time >= groundUntil) {
       for (const d of dashDirections) {
         if (p.ground && d[1] > 0) continue;
         modes.push({ dash: d });
@@ -362,9 +366,35 @@ export function makePilot(
     if (meet < 0) return false;
     const boltTravel = 0.07 + Math.max(0, o.x - p.x - 24) / 250;
     const lead = meet * dt - boltTravel;
-    return meet * dt >= 0.34 && lead >= zapLead - 0.18 && lead <= zapLead + 0.1;
+    return (
+      meet * dt >= 0.34 &&
+      (chooseAction
+        ? lead >= -0.12 && lead <= 0.5
+        : lead >= zapLead - 0.18 && lead <= zapLead + 0.1)
+    );
   }
 
+  // Only an offline lab supplies chooseAction. Ordinary matches keep the original controller.
+  const shotAction = (key) => ({
+    id: key === D ? "drop" : key === L ? "lob" : key === R ? "drive" : "clear",
+    held: [key].filter(Boolean),
+    pulses: [F],
+    swing: key,
+  });
+  function attack(key, allowOptions) {
+    let first = shotAction(key);
+    if (chooseAction && allowOptions && g.time >= nextShotCheck) {
+      const options = [first, ...["", L, R, D].filter((k) => k !== key).map(shotAction)];
+      first = chooseAction("shot", options) ?? first;
+      nextShotCheck = g.time + 0.22;
+    }
+    attackHold = first.swing;
+    send(first.held, first.pulses);
+  }
+  function continueAfter(action) {
+    if (action.swing !== undefined) attackHold = action.swing;
+    send(action.held, action.pulses);
+  }
   function guard(f) {
     if (p.quickT > 0) {
       send([]);
@@ -377,7 +407,14 @@ export function makePilot(
     const move = dir(target - p.x, 2);
     if (dodge(move)) {
       send([move], [U]);
-    } else if (zapLead !== null && canPressureWithZap(f)) {
+    } else if (chooseAction && g.time >= nextZapCheck && canPressureWithZap(f)) {
+      const options = [
+        { id: "recover", held: [move].filter(Boolean), pulses: [] },
+        { id: "zap", held: [move].filter(Boolean), pulses: ["KeyG"] },
+      ];
+      nextZapCheck = g.time + 0.24;
+      continueAfter(chooseAction("pressure", options) ?? options[0]);
+    } else if (!chooseAction && zapLead !== null && canPressureWithZap(f)) {
       send([move], ["KeyG"]);
     } else {
       send([move]);
@@ -429,8 +466,7 @@ export function makePilot(
             selected = k;
           }
         }
-        attackHold = selected;
-        send([selected], [F]);
+        attack(selected, true);
       } else {
         const move = dir(receiveX - p.x, 2);
         send([move]);
@@ -468,6 +504,7 @@ export function makePilot(
       return;
     }
     const jumpAge = plan && n - plan.at;
+    if (plan && g.time < groundUntil && (plan.mode.jump || plan.mode.dash)) plan = null;
     if (!plan || n - lastPlan >= (plan.start < 10 ? 2 : 4) || jumpAge >= plan.start - 1) {
       plan = choose(f);
       if (plan) plan.at = n;
@@ -479,8 +516,25 @@ export function makePilot(
         wantDash = plan.mode.dash && age === 0,
         wantJump = plan.mode.jump === age + 1;
       if (plan.start <= age + 1 && !p.act) {
-        attackHold = plan.key;
-        send([attackHold], [F]);
+        attack(plan.key, p.ground);
+        plan = null;
+        return;
+      }
+      if (chooseAction && (wantJump || wantDash) && g.time >= nextShotCheck) {
+        const [dx, dy] = plan.mode.dash ?? [0, 0];
+        const direction = dx ? dir(dx, 0) : "";
+        const leap = wantDash
+          ? {
+              id: "dash",
+              held: [direction, dy < 0 ? U : dy > 0 ? D : ""].filter(Boolean),
+              pulses: [H],
+            }
+          : { id: "jump", held: [mv].filter(Boolean), pulses: [U] };
+        const grounded = { id: "ground", held: [mv].filter(Boolean), pulses: [], stayGround: 26 };
+        const action = chooseAction("approach", [leap, grounded]) ?? leap;
+        nextShotCheck = g.time + 0.32;
+        if (action.stayGround) groundUntil = g.time + action.stayGround / 60;
+        continueAfter(action);
         plan = null;
         return;
       }
@@ -514,8 +568,7 @@ export function makePilot(
           val = v;
         }
       }
-      attackHold = selected;
-      send([selected], [F]);
+      attack(selected, p.ground);
       return;
     }
     if (
@@ -530,5 +583,12 @@ export function makePilot(
     }
     send([mv]);
   }
-  return { tick };
+  return {
+    tick,
+    prime(action) {
+      last = g.time;
+      if (action.stayGround) groundUntil = g.time + action.stayGround / 60;
+      continueAfter(action);
+    },
+  };
 }

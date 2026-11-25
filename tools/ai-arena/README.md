@@ -59,3 +59,39 @@ lookahead, better reset position after dashes) in separate branches/run director
 Keep the benchmark manifests matched, compare worst-opponent as well as total win rate,
 and keep a final audit off the tuning path. For a longer job, invoke a larger **bounded**
 `--generations` count or resume in a terminal; no hosted runner is set up by this branch.
+
+## Experimental rollout policy
+
+```sh
+# Try the candidate against the released CPU.
+node tools/ai-arena/lab.mjs match --left=rollout --right=unlimited:cpu
+
+# Compare with the incumbent using a fresh common set of opponents and a
+# four-game direct duel; writes a report without changing champion.json.
+node tools/ai-arena/lab.mjs challenge --dir=.ai-lab/rollout --token=rollout-v1 --cases=5 --jobs=6
+
+# Include the rollout candidate in a resumable search; only the usual gate can promote it.
+node tools/ai-arena/lab.mjs evolve --dir=.ai-lab/rollout-evolution --challenger=rollout --generations=2
+```
+
+At selected decision points, the candidate tests ground drops, drives, clears
+and lobs; jump/dash versus staying grounded; and firing a zap versus recovery.
+The forecasts use a separate copy of the actual engine and a common starting
+state and RNG cursor. Stock CPU forecasts restore the CPU's planning state;
+pilot opponents replan using the ordinary, non-recursive policy. This is a
+bounded forecast, not an exact replay of any opponent's hidden future decisions.
+
+A finished rollout scores **+1 for winning the point, -1 for losing**. An unresolved
+branch is scored 0 and ties default to the original action, except equally winning
+branches can prefer not to spend a skill. No reward is given for a zap hit, a smash,
+or using up time. This version has no learned win-probability model: the separate
+`evolve` command can search parameters but the rollout choices themselves are
+lookahead, not neural training. A policy JSON can set `planner: "rollout"` and
+`rolloutHorizon` (72–180 ticks, default 108).
+
+The challenger does not replace the baseline automatically. Match and challenge
+logs include rollout decisions, selected action types, adjudicated branches, and
+sample state hashes. Existing checkpoint runs have a different code revision;
+use a new directory for the rollout experiment.
+
+See [the fixed evaluation results](ROLLOUT_RESULTS.md) for the first comparison.

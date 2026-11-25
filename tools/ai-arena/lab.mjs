@@ -31,6 +31,7 @@ const known = new Set([
   "max-ticks",
   "seed",
   "token",
+  "challenger",
 ]);
 for (const k of Object.keys(opts)) assert.ok(known.has(k), `Unknown option: ${k}`);
 const int = (key, fallback, lo = 1, hi = 10000) => {
@@ -48,6 +49,7 @@ const revisionFiles = [
   "tools/korean-shutout/load-game.mjs",
   "tools/korean-shutout/pilot.mjs",
   "tools/ai-arena/match.mjs",
+  "tools/ai-arena/rollout.mjs",
   "tools/ai-arena/policy.mjs",
   "tools/ai-arena/lab.mjs",
 ];
@@ -86,9 +88,11 @@ const rounds = (base, seed, total) => {
 const loadPolicy = async (name) =>
   name == null || name === "baseline"
     ? baseline
-    : native.includes(name)
-      ? name
-      : validatePolicy(JSON.parse(await readFile(name, "utf8")));
+    : name === "rollout"
+      ? validatePolicy({ planner: "rollout" })
+      : native.includes(name)
+        ? name
+        : validatePolicy(JSON.parse(await readFile(name, "utf8")));
 async function match(args) {
   const { stdout } = await execFile(
     process.execPath,
@@ -227,6 +231,46 @@ if (command === "match") {
       2,
     ),
   );
+} else if (command === "challenge") {
+  const seed = int("seed", 752871, 1, 0xffffffff);
+  const token = opts.token ?? "rollout-v1";
+  assert.ok(/^[a-z0-9_-]{1,60}$/i.test(token), "Invalid --token");
+  const challenger = await loadPolicy(opts.challenger ?? "rollout");
+  const leader = await loadPolicy(opts.left);
+  assert.ok(
+    typeof leader === "object" && typeof challenger === "object",
+    "Expected two pilot policies",
+  );
+  await mkdir(dir, { recursive: true });
+  const filepath = join(dir, `challenge-${token}.json`);
+  const fd = await open(filepath, "wx");
+  await fd.close();
+  const cases = makeCases(`challenge:${token}`, 0, seed, int("cases", 5, 2, 30));
+  const a = await series(leader, cases),
+    b = await series(challenger, cases);
+  const duel = await series(challenger, [
+    { index: 0, opponent: leader, cpuSeed: mixed(seed, token, "duel") },
+  ]);
+  const meetsPromotionGate = gate(a, b) && duel.wins >= 3 && duel.timeouts === 0;
+  const stats = {
+    leader: summary(a),
+    challenger: summary(b),
+    duel: summary(duel),
+    meetsPromotionGate,
+  };
+  await atomic(filepath, {
+    revision,
+    node: process.version,
+    seed,
+    token,
+    maxTicks,
+    leader,
+    challenger,
+    cases,
+    stats,
+    records: { leader: a.records, challenger: b.records, duel: duel.records },
+  });
+  console.log(JSON.stringify(stats, null, 2));
 } else if (command === "evolve") {
   await mkdir(dir, { recursive: true });
   const lock = join(dir, "evolve.lock");
@@ -238,8 +282,10 @@ if (command === "match") {
       seed: int("seed", 43271, 1, 0xffffffff),
       cases: int("cases", 4, 2, 30),
       candidates: int("candidates", 3, 1, 40),
+      challenger: opts.challenger ? await loadPolicy(opts.challenger) : null,
       maxTicks,
     };
+    assert.ok(typeof setup.challenger !== "string", "Challenger must be a pilot policy");
     if (prev) {
       assert.equal(prev.revision, revision, "Code/runtime changed; use a new --dir");
       assert.deepEqual(setup, prev.setup, "Run configuration changed; use a new --dir");
@@ -251,6 +297,9 @@ if (command === "match") {
       const gateCases = makeCases("gate", g, setup.seed, setup.cases);
       const candidates = [
         champion,
+        ...(setup.challenger && JSON.stringify(setup.challenger) !== JSON.stringify(champion)
+          ? [setup.challenger]
+          : []),
         ...rounds(champion, mixed(setup.seed, "mutate", g), setup.candidates),
       ];
       const training = [];
@@ -349,4 +398,4 @@ if (command === "match") {
     });
     console.log(JSON.stringify(summary(result), null, 2));
   }
-} else throw Error("Commands: match, evolve, status, audit");
+} else throw Error("Commands: match, challenge, evolve, status, audit");

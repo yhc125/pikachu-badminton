@@ -22,3 +22,15 @@ Object.assign(globalThis, {
 });
 await import("../../badminton/game.js");
 export const match = globalThis.__pika;
+
+// Another module instance owns all of its players, inputs, CPU and cosmetic state.
+let rolloutGame;
+export async function loadRolloutGame() {
+  if (rolloutGame) return rolloutGame;
+  try {
+    await import("../../badminton/game.js?lab-rollout");
+    return (rolloutGame = globalThis.__pika);
+  } finally {
+    globalThis.__pika = match;
+  }
+}
